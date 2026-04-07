@@ -1,13 +1,15 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
+
+const User = require('./models/User');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const USERS_FILE = path.join(__dirname, 'users.json');
 const JWT_SECRET = process.env.JWT_SECRET || 'ironcore_coach_secret_key_2026';
 const JWT_EXPIRES = '7d';
 const SALT_ROUNDS = 10;
@@ -17,31 +19,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// ── Database Helpers ───────────────────────────────────
+// ── Database Connection ───────────────────────────────
+const MONGODB_URI = process.env.MONGODB_URI;
 
-function readUsers() {
-  if (!fs.existsSync(USERS_FILE)) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2));
-  }
-  const raw = fs.readFileSync(USERS_FILE, 'utf-8');
-  return JSON.parse(raw);
+if (!MONGODB_URI) {
+  console.warn("⚠️ MONGODB_URI is not defined. Please set it in your environment variables.");
+} else {
+  mongoose.connect(MONGODB_URI)
+    .then(() => console.log('🟢 MongoDB Connected Successfully'))
+    .catch(err => console.error('🔴 MongoDB Connection Error:', err));
 }
 
-function writeUsers(data) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
-}
-
-function findUser(email) {
-  const db = readUsers();
-  return db.users.find(u => u.email === email.toLowerCase().trim());
-}
-
+// ── Helpers ───────────────────────────────────────────
 function getToday() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// ── Auth Middleware ─────────────────────────────────────
-
+// ── Auth Middleware ────────────────────────────────────
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -60,7 +54,6 @@ function authMiddleware(req, res, next) {
 }
 
 // ── Workout Generator ──────────────────────────────────
-
 function generateWorkout(level) {
   const sets = Math.min(2 + Math.floor(level / 3), 6);
   const reps = Math.min(5 + level * 2, 30);
@@ -172,73 +165,34 @@ function generateWorkout(level) {
 
 // ── Auth Routes ────────────────────────────────────────
 
-/**
- * POST /api/signup
- * Body: { name, email, password }
- */
 app.post('/api/signup', async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    // Validation
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Name, email, and password are required.' });
-    }
-
-    if (name.trim().length < 2) {
-      return res.status(400).json({ error: 'Name must be at least 2 characters.' });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: 'Please enter a valid email address.' });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-    }
+    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password required.' });
+    if (name.trim().length < 2) return res.status(400).json({ error: 'Name must be at least 2 characters.' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
 
     const normalEmail = email.toLowerCase().trim();
 
-    // Check if user already exists
-    if (findUser(normalEmail)) {
-      return res.status(409).json({ error: 'An account with this email already exists.' });
-    }
+    const existingUser = await User.findOne({ email: normalEmail });
+    if (existingUser) return res.status(409).json({ error: 'Account with this email already exists.' });
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-    // Create user with fresh workout data
-    const newUser = {
+    const newUser = new User({
       name: name.trim(),
       email: normalEmail,
-      password: hashedPassword,
-      createdAt: new Date().toISOString(),
-      data: {
-        level: 1,
-        streak: 0,
-        strongSessions: 0,
-        hardSessions: 0,
-        lastWorkoutDate: null,
-        history: [],
-      },
-    };
+      password: hashedPassword
+    });
+    await newUser.save();
 
-    const db = readUsers();
-    db.users.push(newUser);
-    writeUsers(db);
-
-    // Generate token
-    const token = jwt.sign(
-      { email: normalEmail, name: newUser.name },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES }
-    );
+    const token = jwt.sign({ email: newUser.email, name: newUser.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
     res.status(201).json({
       message: 'Account created successfully!',
       token,
-      user: { name: newUser.name, email: normalEmail },
+      user: { name: newUser.name, email: normalEmail }
     });
   } catch (err) {
     console.error('Signup error:', err);
@@ -246,40 +200,25 @@ app.post('/api/signup', async (req, res) => {
   }
 });
 
-/**
- * POST /api/login
- * Body: { email, password }
- */
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required.' });
-    }
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
 
     const normalEmail = email.toLowerCase().trim();
-    const user = findUser(normalEmail);
+    const user = await User.findOne({ email: normalEmail });
 
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
+    if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
+    if (!match) return res.status(401).json({ error: 'Invalid email or password.' });
 
-    const token = jwt.sign(
-      { email: normalEmail, name: user.name },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES }
-    );
+    const token = jwt.sign({ email: user.email, name: user.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
     res.json({
       message: `Welcome back, ${user.name}!`,
       token,
-      user: { name: user.name, email: normalEmail },
+      user: { name: user.name, email: user.email }
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -287,43 +226,39 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-/**
- * GET /api/me
- * Returns current user info (protected).
- */
-app.get('/api/me', authMiddleware, (req, res) => {
-  const user = findUser(req.userEmail);
-  if (!user) return res.status(404).json({ error: 'User not found.' });
+app.get('/api/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ email: req.userEmail });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
 
-  res.json({
-    name: user.name,
-    email: user.email,
-    createdAt: user.createdAt,
-  });
+    res.json({
+      name: user.name,
+      email: user.email,
+      createdAt: user.createdAt
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
 });
 
 // ── Protected Workout Routes ───────────────────────────
 
-/**
- * GET /api/status — Returns user's level, streak, history, and today's workout.
- */
-app.get('/api/status', authMiddleware, (req, res) => {
+app.get('/api/status', authMiddleware, async (req, res) => {
   try {
-    const user = findUser(req.userEmail);
+    const user = await User.findOne({ email: req.userEmail });
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
-    const data = user.data;
-    const workout = generateWorkout(data.level);
+    const workout = generateWorkout(user.level);
     const today = getToday();
-    const workedOutToday = data.history.some(h => h.date === today);
+    const workedOutToday = user.history.some(h => h.date === today);
 
     res.json({
-      level: data.level,
-      streak: data.streak,
-      history: data.history,
+      level: user.level,
+      streak: user.streak,
+      history: user.history,
       workout,
       workedOutToday,
-      totalWorkouts: data.history.length,
+      totalWorkouts: user.totalWorkouts,
       userName: user.name,
     });
   } catch (err) {
@@ -332,15 +267,12 @@ app.get('/api/status', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * POST /api/start — Returns the workout for the user's current level.
- */
-app.post('/api/start', authMiddleware, (req, res) => {
+app.post('/api/start', authMiddleware, async (req, res) => {
   try {
-    const user = findUser(req.userEmail);
+    const user = await User.findOne({ email: req.userEmail });
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
-    const workout = generateWorkout(user.data.level);
+    const workout = generateWorkout(user.level);
     res.json({ workout });
   } catch (err) {
     console.error('Error starting workout:', err);
@@ -348,21 +280,16 @@ app.post('/api/start', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * POST /api/complete — Log workout with performance rating.
- */
-app.post('/api/complete', authMiddleware, (req, res) => {
+app.post('/api/complete', authMiddleware, async (req, res) => {
   try {
     const { performance } = req.body;
     if (!['easy', 'normal', 'hard'].includes(performance)) {
-      return res.status(400).json({ error: 'Invalid performance. Use easy, normal, or hard.' });
+      return res.status(400).json({ error: 'Invalid performance.' });
     }
 
-    const db = readUsers();
-    const userIdx = db.users.findIndex(u => u.email === req.userEmail);
-    if (userIdx === -1) return res.status(404).json({ error: 'User not found.' });
+    const user = await User.findOne({ email: req.userEmail });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
 
-    const data = db.users[userIdx].data;
     const today = getToday();
     const scoreMap = { easy: 3, normal: 2, hard: 1 };
     const score = scoreMap[performance];
@@ -371,63 +298,64 @@ app.post('/api/complete', authMiddleware, (req, res) => {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    
+    // Find last workout date
+    const lastHistory = user.history.length > 0 ? user.history[user.history.length - 1] : null;
+    const lastWorkoutDate = lastHistory ? lastHistory.date : null;
 
-    if (data.lastWorkoutDate === today) {
-      const idx = data.history.findIndex(h => h.date === today);
+    if (lastWorkoutDate === today) {
+      const idx = user.history.findIndex(h => h.date === today);
       if (idx !== -1) {
-        data.history[idx].performance = performance;
-        data.history[idx].score = score;
+        user.history[idx].performance = performance;
+        user.history[idx].score = score;
       }
     } else {
-      if (data.lastWorkoutDate === yesterdayStr || data.lastWorkoutDate === today) {
-        data.streak += 1;
-      } else if (data.lastWorkoutDate !== null) {
-        data.streak = 1;
+      if (lastWorkoutDate === yesterdayStr || lastWorkoutDate === today) {
+        user.streak += 1;
       } else {
-        data.streak = 1;
+        user.streak = 1;
       }
-
-      data.lastWorkoutDate = today;
-      data.history.push({ date: today, performance, score, level: data.level });
+      user.history.push({ date: today, performance, score, level: user.level });
+      user.totalWorkouts += 1;
     }
 
     // Level adjustment
     if (performance === 'easy') {
-      data.strongSessions += 1;
-      data.hardSessions = 0;
+      user.strongSessions += 1;
+      user.hardSessions = 0;
     } else if (performance === 'normal') {
-      data.hardSessions = 0;
+      user.hardSessions = 0;
     } else if (performance === 'hard') {
-      data.hardSessions += 1;
-      data.strongSessions = 0;
+      user.hardSessions += 1;
+      user.strongSessions = 0;
     }
 
     let levelChange = null;
-    if (data.strongSessions >= 3) {
-      data.level += 1;
-      data.strongSessions = 0;
+    if (user.strongSessions >= 3) {
+      user.level += 1;
+      user.strongSessions = 0;
       levelChange = 'up';
-    } else if (data.hardSessions >= 2) {
-      data.level = Math.max(1, data.level - 1);
-      data.hardSessions = 0;
+    } else if (user.hardSessions >= 2) {
+      user.level = Math.max(1, user.level - 1);
+      user.hardSessions = 0;
       levelChange = 'down';
     }
 
-    writeUsers(db);
+    await user.save();
 
-    const workout = generateWorkout(data.level);
+    const workout = generateWorkout(user.level);
 
     res.json({
-      level: data.level,
-      streak: data.streak,
+      level: user.level,
+      streak: user.streak,
       score,
       levelChange,
       workout,
-      totalWorkouts: data.history.length,
+      totalWorkouts: user.totalWorkouts,
       message: levelChange === 'up'
-        ? `🔥 Level Up! You're now Level ${data.level}!`
+        ? `🔥 Level Up! You're now Level ${user.level}!`
         : levelChange === 'down'
-        ? `💪 Adjusted to Level ${data.level}. Keep pushing!`
+        ? `💪 Adjusted to Level ${user.level}. Keep pushing!`
         : `✅ Workout logged. Keep going!`,
     });
   } catch (err) {
@@ -436,24 +364,20 @@ app.post('/api/complete', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * POST /api/reset — Resets user's progress.
- */
-app.post('/api/reset', authMiddleware, (req, res) => {
+app.post('/api/reset', authMiddleware, async (req, res) => {
   try {
-    const db = readUsers();
-    const userIdx = db.users.findIndex(u => u.email === req.userEmail);
-    if (userIdx === -1) return res.status(404).json({ error: 'User not found.' });
+    const user = await User.findOne({ email: req.userEmail });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
 
-    db.users[userIdx].data = {
-      level: 1,
-      streak: 0,
-      strongSessions: 0,
-      hardSessions: 0,
-      lastWorkoutDate: null,
-      history: [],
-    };
-    writeUsers(db);
+    user.level = 1;
+    user.streak = 0;
+    user.totalWorkouts = 0;
+    user.strongSessions = 0;
+    user.hardSessions = 0;
+    user.history = [];
+    
+    await user.save();
+    
     res.json({ message: 'Progress reset.' });
   } catch (err) {
     console.error('Error resetting:', err);
@@ -466,7 +390,12 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// ── Start ──────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n⚡ IronCore Coach running at http://localhost:${PORT}\n`);
-});
+// Export app for serverless deployment (Vercel)
+module.exports = app;
+
+// Listen on port if not running in a serverless environment
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n⚡ IronCore Coach backend running on port ${PORT}\n`);
+  });
+}
