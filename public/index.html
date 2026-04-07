@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="IronCore Coach — Full-body fitness, posture correction, and progressive strength training. Track your level, streak, and daily progress." />
+  <title>IronCore Coach — Full Body Strength & Posture</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <!-- ─── Background Effects ─── -->
+  <div class="bg-glow bg-glow--1"></div>
+  <div class="bg-glow bg-glow--2"></div>
+  <div class="bg-glow bg-glow--3"></div>
+
+  <!-- ─── Header ─── -->
+  <header class="header" id="header">
+    <div class="header__brand">
+      <span class="header__icon">🏋️</span>
+      <h1 class="header__title">Iron<span class="text-accent">Core</span> Coach</h1>
+    </div>
+    <p class="header__tagline">Full body strength, posture & recovery — one workout at a time.</p>
+
+    <!-- Auth buttons (shown when logged in) -->
+    <div class="header__actions" id="header-actions" style="display:none">
+      <span class="header__user" id="header-user-name"></span>
+      <button class="btn btn--icon" id="btn-notifications" title="Enable Notifications" aria-label="Enable Notifications">
+        🔔
+      </button>
+      <button class="btn btn--ghost btn--logout" id="btn-logout" title="Log out">
+        Logout
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════ -->
+  <!--  AUTH VIEWS                                        -->
+  <!-- ═══════════════════════════════════════════════════ -->
+
+  <!-- Login View -->
+  <div class="view view--active" id="view-login">
+    <div class="auth-container">
+      <div class="card card--auth">
+        <div class="auth-header">
+          <span class="auth-header__icon">🔐</span>
+          <h2 class="auth-header__title">Welcome Back</h2>
+          <p class="auth-header__subtitle">Log in to continue your training</p>
+        </div>
+
+        <form class="auth-form" id="login-form">
+          <div class="form-group">
+            <label class="form-label" for="login-email">Email</label>
+            <input class="form-input" type="email" id="login-email" placeholder="you@example.com" required autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="login-password">Password</label>
+            <input class="form-input" type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password" />
+          </div>
+          <div class="form-error" id="login-error"></div>
+          <button class="btn btn--primary btn--lg" type="submit" id="btn-login-submit">
+            Log In
+          </button>
+        </form>
+
+        <div class="auth-footer">
+          <p>Don't have an account? <a href="#" class="auth-link" id="link-to-signup">Sign up</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Signup View -->
+  <div class="view" id="view-signup">
+    <div class="auth-container">
+      <div class="card card--auth">
+        <div class="auth-header">
+          <span class="auth-header__icon">💪</span>
+          <h2 class="auth-header__title">Join IronCore</h2>
+          <p class="auth-header__subtitle">Create your account and start training</p>
+        </div>
+
+        <form class="auth-form" id="signup-form">
+          <div class="form-group">
+            <label class="form-label" for="signup-name">Name</label>
+            <input class="form-input" type="text" id="signup-name" placeholder="Your name" required autocomplete="name" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="signup-email">Email</label>
+            <input class="form-input" type="email" id="signup-email" placeholder="you@example.com" required autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="signup-password">Password</label>
+            <input class="form-input" type="password" id="signup-password" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
+          </div>
+          <div class="form-error" id="signup-error"></div>
+          <button class="btn btn--primary btn--lg" type="submit" id="btn-signup-submit">
+            Create Account
+          </button>
+        </form>
+
+        <div class="auth-footer">
+          <p>Already have an account? <a href="#" class="auth-link" id="link-to-login">Log in</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════ -->
+  <!--  APP VIEWS (protected — shown after login)         -->
+  <!-- ═══════════════════════════════════════════════════ -->
+
+  <!-- Stats Bar -->
+  <section class="stats" id="stats-bar" style="display:none">
+    <div class="stat-card stat-card--level" id="stat-level">
+      <div class="stat-card__icon">🛡️</div>
+      <div class="stat-card__value" id="level-value">1</div>
+      <div class="stat-card__label">Level</div>
+    </div>
+    <div class="stat-card stat-card--streak" id="stat-streak">
+      <div class="stat-card__icon">🔥</div>
+      <div class="stat-card__value" id="streak-value">0</div>
+      <div class="stat-card__label">Day Streak</div>
+    </div>
+    <div class="stat-card stat-card--total" id="stat-total">
+      <div class="stat-card__icon">📊</div>
+      <div class="stat-card__value" id="total-value">0</div>
+      <div class="stat-card__label">Workouts</div>
+    </div>
+  </section>
+
+  <!-- Main Content -->
+  <main class="main" id="main-content" style="display:none">
+
+    <!-- Dashboard View -->
+    <div class="view" id="view-dashboard">
+      <div class="card card--workout" id="workout-card">
+        <div class="card__header">
+          <h2 class="card__title">Today's Workout</h2>
+          <span class="badge" id="workout-badge">Ready</span>
+        </div>
+        <div class="exercise-list" id="exercise-list"></div>
+        <button class="btn btn--primary btn--lg" id="btn-start">
+          <span class="btn__icon">▶</span>
+          Start Workout
+        </button>
+        <div class="card__done" id="done-today" style="display:none">
+          <span class="done-icon">✅</span>
+          <span>Workout Complete! Come back tomorrow.</span>
+        </div>
+      </div>
+
+      <div class="card card--chart">
+        <div class="card__header">
+          <h2 class="card__title">Weekly Progress</h2>
+        </div>
+        <div class="chart-container">
+          <canvas id="progress-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="card card--history">
+        <div class="card__header">
+          <h2 class="card__title">Recent History</h2>
+        </div>
+        <div class="history-list" id="history-list">
+          <p class="empty-state">No workouts yet. Start your first one! 💪</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Workout View -->
+    <div class="view" id="view-workout">
+      <div class="card card--active-workout">
+        <button class="btn btn--ghost btn--back" id="btn-back">← Back</button>
+        <h2 class="card__title card__title--center">🔥 Full Body Workout</h2>
+        <div class="workout-level-badge" id="workout-level-badge">Level 1</div>
+
+        <div class="active-exercises" id="active-exercises"></div>
+
+        <div class="completion-section">
+          <h3 class="completion-title">How did it feel?</h3>
+          <div class="completion-buttons">
+            <button class="btn btn--easy" id="btn-easy" data-performance="easy">
+              <span class="btn__emoji">😎</span>
+              <span>Easy</span>
+            </button>
+            <button class="btn btn--normal" id="btn-normal" data-performance="normal">
+              <span class="btn__emoji">😤</span>
+              <span>Normal</span>
+            </button>
+            <button class="btn btn--hard" id="btn-hard" data-performance="hard">
+              <span class="btn__emoji">🥵</span>
+              <span>Hard</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+      <div class="toast__content" id="toast-content"></div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>IronCore Coach &copy; 2026 &mdash; Built to make you stronger.</p>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="js/notifications.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
