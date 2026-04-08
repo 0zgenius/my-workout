@@ -4,9 +4,8 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const mongoose = require('mongoose');
 
-const User = require('./models/User');
+const { pool, initializeDB } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,16 +18,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// ── Database Connection ───────────────────────────────
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  console.warn("⚠️ MONGODB_URI is not defined. Please set it in your environment variables.");
-} else {
-  mongoose.connect(MONGODB_URI)
-    .then(() => console.log('🟢 MongoDB Connected Successfully'))
-    .catch(err => console.error('🔴 MongoDB Connection Error:', err));
-}
+// Initialize Postgres
+initializeDB();
 
 // ── Helpers ───────────────────────────────────────────
 function getToday() {
@@ -175,24 +166,23 @@ app.post('/api/signup', async (req, res) => {
 
     const normalEmail = email.toLowerCase().trim();
 
-    const existingUser = await User.findOne({ email: normalEmail });
-    if (existingUser) return res.status(409).json({ error: 'Account with this email already exists.' });
+    // Check existing
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [normalEmail]);
+    if (existing.rows.length > 0) return res.status(409).json({ error: 'Account with this email already exists.' });
 
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-    const newUser = new User({
-      name: name.trim(),
-      email: normalEmail,
-      password: hashedPassword
-    });
-    await newUser.save();
+    await pool.query(
+      'INSERT INTO users (name, email, password) VALUES ($1, $2, $3)',
+      [name.trim(), normalEmail, hashedPassword]
+    );
 
-    const token = jwt.sign({ email: newUser.email, name: newUser.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+    const token = jwt.sign({ email: normalEmail, name: name.trim() }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
     res.status(201).json({
       message: 'Account created successfully!',
       token,
-      user: { name: newUser.name, email: normalEmail }
+      user: { name: name.trim(), email: normalEmail }
     });
   } catch (err) {
     console.error('Signup error:', err);
@@ -206,10 +196,11 @@ app.post('/api/login', async (req, res) => {
     if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
 
     const normalEmail = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalEmail });
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [normalEmail]);
 
-    if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid email or password.' });
 
+    const user = result.rows[0];
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: 'Invalid email or password.' });
 
@@ -228,13 +219,14 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/me', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.userEmail });
-    if (!user) return res.status(404).json({ error: 'User not found.' });
+    const result = await pool.query('SELECT name, email, created_at FROM users WHERE email = $1', [req.userEmail]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
+    const user = result.rows[0];
     res.json({
       name: user.name,
       email: user.email,
-      createdAt: user.createdAt
+      createdAt: user.created_at
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user' });
@@ -245,20 +237,22 @@ app.get('/api/me', authMiddleware, async (req, res) => {
 
 app.get('/api/status', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.userEmail });
-    if (!user) return res.status(404).json({ error: 'User not found.' });
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [req.userEmail]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
+    const user = result.rows[0];
     const workout = generateWorkout(user.level);
     const today = getToday();
-    const workedOutToday = user.history.some(h => h.date === today);
+    const history = user.history || [];
+    const workedOutToday = history.some(h => h.date === today);
 
     res.json({
       level: user.level,
       streak: user.streak,
-      history: user.history,
+      history: history,
       workout,
       workedOutToday,
-      totalWorkouts: user.totalWorkouts,
+      totalWorkouts: user.total_workouts,
       userName: user.name,
     });
   } catch (err) {
@@ -269,10 +263,10 @@ app.get('/api/status', authMiddleware, async (req, res) => {
 
 app.post('/api/start', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.userEmail });
-    if (!user) return res.status(404).json({ error: 'User not found.' });
+    const result = await pool.query('SELECT level FROM users WHERE email = $1', [req.userEmail]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
-    const workout = generateWorkout(user.level);
+    const workout = generateWorkout(result.rows[0].level);
     res.json({ workout });
   } catch (err) {
     console.error('Error starting workout:', err);
@@ -287,12 +281,20 @@ app.post('/api/complete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid performance.' });
     }
 
-    const user = await User.findOne({ email: req.userEmail });
-    if (!user) return res.status(404).json({ error: 'User not found.' });
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [req.userEmail]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
+    const user = result.rows[0];
+    const history = user.history || [];
     const today = getToday();
     const scoreMap = { easy: 3, normal: 2, hard: 1 };
     const score = scoreMap[performance];
+
+    let newStreak = user.streak;
+    let newTotal = user.total_workouts;
+    let newStrong = user.strong_sessions;
+    let newHard = user.hard_sessions;
+    let newLevel = user.level;
 
     // Streak logic
     const yesterday = new Date();
@@ -300,62 +302,70 @@ app.post('/api/complete', authMiddleware, async (req, res) => {
     const yesterdayStr = yesterday.toISOString().slice(0, 10);
     
     // Find last workout date
-    const lastHistory = user.history.length > 0 ? user.history[user.history.length - 1] : null;
+    const lastHistory = history.length > 0 ? history[history.length - 1] : null;
     const lastWorkoutDate = lastHistory ? lastHistory.date : null;
 
     if (lastWorkoutDate === today) {
-      const idx = user.history.findIndex(h => h.date === today);
+      const idx = history.findIndex(h => h.date === today);
       if (idx !== -1) {
-        user.history[idx].performance = performance;
-        user.history[idx].score = score;
+        history[idx].performance = performance;
+        history[idx].score = score;
       }
     } else {
       if (lastWorkoutDate === yesterdayStr || lastWorkoutDate === today) {
-        user.streak += 1;
+        newStreak += 1;
       } else {
-        user.streak = 1;
+        newStreak = 1;
       }
-      user.history.push({ date: today, performance, score, level: user.level });
-      user.totalWorkouts += 1;
+      history.push({ date: today, performance, score, level: user.level });
+      newTotal += 1;
     }
 
     // Level adjustment
     if (performance === 'easy') {
-      user.strongSessions += 1;
-      user.hardSessions = 0;
+      newStrong += 1;
+      newHard = 0;
     } else if (performance === 'normal') {
-      user.hardSessions = 0;
+      newHard = 0;
     } else if (performance === 'hard') {
-      user.hardSessions += 1;
-      user.strongSessions = 0;
+      newHard += 1;
+      newStrong = 0;
     }
 
     let levelChange = null;
-    if (user.strongSessions >= 3) {
-      user.level += 1;
-      user.strongSessions = 0;
+    if (newStrong >= 3) {
+      newLevel += 1;
+      newStrong = 0;
       levelChange = 'up';
-    } else if (user.hardSessions >= 2) {
-      user.level = Math.max(1, user.level - 1);
-      user.hardSessions = 0;
+    } else if (newHard >= 2) {
+      newLevel = Math.max(1, newLevel - 1);
+      newHard = 0;
       levelChange = 'down';
     }
 
-    await user.save();
+    const updateQuery = `
+      UPDATE users 
+      SET level = $1, streak = $2, strong_sessions = $3, hard_sessions = $4, history = $5, total_workouts = $6 
+      WHERE email = $7
+    `;
+    
+    await pool.query(updateQuery, [
+      newLevel, newStreak, newStrong, newHard, JSON.stringify(history), newTotal, req.userEmail
+    ]);
 
-    const workout = generateWorkout(user.level);
+    const workout = generateWorkout(newLevel);
 
     res.json({
-      level: user.level,
-      streak: user.streak,
+      level: newLevel,
+      streak: newStreak,
       score,
       levelChange,
       workout,
-      totalWorkouts: user.totalWorkouts,
+      totalWorkouts: newTotal,
       message: levelChange === 'up'
-        ? `🔥 Level Up! You're now Level ${user.level}!`
+        ? `🔥 Level Up! You're now Level ${newLevel}!`
         : levelChange === 'down'
-        ? `💪 Adjusted to Level ${user.level}. Keep pushing!`
+        ? `💪 Adjusted to Level ${newLevel}. Keep pushing!`
         : `✅ Workout logged. Keep going!`,
     });
   } catch (err) {
@@ -366,17 +376,12 @@ app.post('/api/complete', authMiddleware, async (req, res) => {
 
 app.post('/api/reset', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.userEmail });
-    if (!user) return res.status(404).json({ error: 'User not found.' });
-
-    user.level = 1;
-    user.streak = 0;
-    user.totalWorkouts = 0;
-    user.strongSessions = 0;
-    user.hardSessions = 0;
-    user.history = [];
-    
-    await user.save();
+    const updateQuery = `
+      UPDATE users 
+      SET level = 1, streak = 0, strong_sessions = 0, hard_sessions = 0, history = '[]'::jsonb, total_workouts = 0 
+      WHERE email = $1
+    `;
+    await pool.query(updateQuery, [req.userEmail]);
     
     res.json({ message: 'Progress reset.' });
   } catch (err) {
