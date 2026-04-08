@@ -419,6 +419,10 @@ function renderActiveWorkout() {
             <div class="active-exercise__name">${ex.name}</div>
             <div class="active-exercise__sets">${ex.sets} sets × ${ex.reps} reps</div>
           </div>
+          ${ex.reps.toString().endsWith('s') ? `
+            <button class="active-exercise__timer-btn" onclick="startExerciseTimer(${idx}, parseInt('${ex.reps}'))" title="Start Timer">⏱️</button>
+            <span class="active-exercise__timer-display" id="timer-display-${idx}"></span>
+          ` : ''}
           <a href="https://www.youtube.com/results?search_query=${encodeURIComponent('how to do ' + ex.name + ' exercise')}" target="_blank" rel="noopener noreferrer" class="active-youtube-link" title="Watch Tutorial">🎥</a>
           <button class="active-exercise__check" onclick="toggleExercise(${idx})" aria-label="Mark ${ex.name} complete">✓</button>
         </div>
@@ -490,4 +494,63 @@ function animateValue(el, target) {
   }
 
   requestAnimationFrame(update);
+}
+
+// ── Timers & Audio ────────────────────────────────────────
+
+let audioCtx = null;
+
+function startExerciseTimer(idx, seconds) {
+  const btn = document.querySelector(`#active-ex-${idx} .active-exercise__timer-btn`);
+  const display = document.getElementById(`timer-display-${idx}`);
+  if (!btn || !display) return;
+  
+  btn.style.display = 'none';
+  display.style.display = 'inline-block';
+  
+  let timeLeft = seconds;
+  display.textContent = `${timeLeft}s`;
+  
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  
+  const interval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft > 0) {
+      display.textContent = `${timeLeft}s`;
+    } else {
+      clearInterval(interval);
+      display.textContent = `0s`;
+      display.style.color = 'var(--text-muted)';
+      
+      playRingTone(audioCtx);
+      
+      const el = document.getElementById(`active-ex-${idx}`);
+      if (el && !el.classList.contains('completed')) {
+        toggleExercise(idx);
+      }
+    }
+  }, 1000);
+}
+
+function playRingTone(ctx) {
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  
+  const osc = ctx.createOscillator();
+  const gainNode = ctx.createGain();
+  osc.connect(gainNode);
+  gainNode.connect(ctx.destination);
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(800, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+  osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.6);
+  
+  gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 1.2);
+  
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 1.5);
 }
